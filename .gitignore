@@ -1,0 +1,6 @@
+*.bam
+*.bai
+*.fq.gz
+*.fastq.gz
+*.snp.gz
+__pycache__/

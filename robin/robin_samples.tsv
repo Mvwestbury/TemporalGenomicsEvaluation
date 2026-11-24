@@ -1,0 +1,11 @@
+species	voucher	CRR	period	ref
+Petroica traversi	BRH03	ERR6335766	historical	/path/to/TemporalGenomicsEvaluation/references/full/Ptraversi_NRM_v1.fasta
+Petroica traversi	BRH08	ERR6335811	historical	/path/to/TemporalGenomicsEvaluation/references/full/Ptraversi_NRM_v1.fasta
+Petroica traversi	BRH11	ERR6335831	historical	/path/to/TemporalGenomicsEvaluation/references/full/Ptraversi_NRM_v1.fasta
+Petroica traversi	BRH14	ERR6335861	historical	/path/to/TemporalGenomicsEvaluation/references/full/Ptraversi_NRM_v1.fasta
+Petroica traversi	BRH17	ERR6335891	historical	/path/to/TemporalGenomicsEvaluation/references/full/Ptraversi_NRM_v1.fasta
+Petroica traversi	BR05	ERR6336069	modern	/path/to/TemporalGenomicsEvaluation/references/full/Ptraversi_NRM_v1.fasta
+Petroica traversi	BR32	ERR6336081	modern	/path/to/TemporalGenomicsEvaluation/references/full/Ptraversi_NRM_v1.fasta
+Petroica traversi	BRM01	ERR6336093	modern	/path/to/TemporalGenomicsEvaluation/references/full/Ptraversi_NRM_v1.fasta
+Petroica traversi	BRM03	ERR6336095	modern	/path/to/TemporalGenomicsEvaluation/references/full/Ptraversi_NRM_v1.fasta
+Petroica traversi	BRM05	ERR6336097	modern	/path/to/TemporalGenomicsEvaluation/references/full/Ptraversi_NRM_v1.fasta
