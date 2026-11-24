@@ -8,4 +8,4 @@
 # Keep N_PARALLEL modest: GSA blocks hosts that open too many connections.
 cd /path/to/TemporalGenomicsEvaluation
 echo "host $(hostname)  start $(date)"
-./wget_files.sh "$1" "${2:-3}"
+./pipeline/wget_files.sh "$1" "${2:-3}"

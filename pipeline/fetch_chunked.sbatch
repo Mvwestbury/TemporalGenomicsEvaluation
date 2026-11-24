@@ -8,4 +8,4 @@
 # Keep N_PARALLEL modest: GSA blocks hosts that open too many connections.
 cd /path/to/TemporalGenomicsEvaluation
 echo "host $(hostname)  start $(date)"
-./fetch_chunked.sh "$1" "$2" "${3:-6}" "${4:-}"
+./pipeline/fetch_chunked.sh "$1" "$2" "${3:-6}" "${4:-}"

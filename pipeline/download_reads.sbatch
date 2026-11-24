@@ -8,6 +8,6 @@
 cd /path/to/TemporalGenomicsEvaluation
 echo "host $(hostname)  start $(date)"
 curl -s -o /dev/null -w "GSA reachable: HTTP %{http_code}\n" --max-time 60 https://download.cncb.ac.cn/gsa5/
-./download_reads.sh "$1" "${2:-6}"
+./pipeline/download_reads.sh "$1" "${2:-6}"
 echo "end $(date)"
 tail -1 logs/download_*.log

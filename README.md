@@ -8,7 +8,7 @@ Code to reproduce the analyses of the paper. The repository contains:
 - the exact inputs given to the read simulator SCAR;
 - the plotted values of every figure.
 
-The scripts are the versions that were run. Three things were changed: absolute cluster paths are
+The scripts are the versions that were run. Four things were changed: the general cluster scripts were moved into `pipeline/` (calls between scripts updated), absolute cluster paths are
 replaced by placeholders (see **Paths**), the third SCAR arm and its profiles are named `tvex`
 (transversion excess), and the in-house damage counter is called TvCount, consistently throughout. Reads, BAMs and other large intermediate files are not included.
 
@@ -18,22 +18,25 @@ replaced by placeholders (see **Paths**), the third SCAR arm and its profiles ar
 |---|---|---|
 | Liu et al. 2026: *Fringilla montifringilla*, *Actinodura cyanouroptera*, *Trochalopteron erythrocephalum*, *Yuhina occipitalis* (5 historical + 5 modern each) | GSA CRA020079, CRA032748 | `metadata/full_map_samples.tsv`, `metadata/pilot_samples.tsv`, `metadata/four_species_*.tsv` |
 | Black robin, *Petroica traversi* (5 historical + 5 modern) | ENA, runs in `robin/robin_files.tsv` | `robin/robin_samples.tsv` |
-| References | bFriMon1 (GCA_988331165); assemblies of Liu et al. (MT275, GLG_GLGS1218, GLG_GLGS5798); *P. traversi* NRM v1 | `prep_refs.sbatch`, `robin/rb_ref.sbatch` |
+| References | bFriMon1 (GCA_988331165); assemblies of Liu et al. (MT275, GLG_GLGS1218, GLG_GLGS5798); *P. traversi* NRM v1 | `pipeline/prep_refs.sbatch`, `robin/rb_ref.sbatch` |
 
-## Layout (the cluster project layout, kept so that the scripts' relative paths are valid)
+## Layout
+
+General cluster scripts are in `pipeline/`; robin-specific copies are in `robin/`. Submit every script from the
+repository root (e.g. `sbatch --array=1-40 pipeline/het_ind.sbatch`), since paths are relative to it.
 
 | Path | What it does |
 |---|---|
-| `download_reads.*`, `fetch_chunked.*`, `wget_files.*`, `robin/rb_reads.sbatch` | Download and MD5-check the reads |
-| `prep_refs.sbatch`, `actinodura_*.sbatch`, `robin/rb_ref.sbatch` | Index the references; check the *Actinodura* reference (read mismatch rates against candidate assemblies) |
-| `pilot_map.sbatch` | 1 M-fragment pilot mapping, mapDamage and TvCount (both bwa mem and bwa aln modes) |
-| `full_map.sbatch`, `rescale_md.sbatch`, `robin/rb_map.sbatch`, `robin/rb_rescale_md.sbatch` | Full mapping with PlainMap (bwa mem) and mapDamage quality rescaling |
-| `het_ind.sbatch`, `het_matched.sbatch`, `scripts/depth_match_manifest.py`, `robin/rb_het_ind.sbatch` | ANGSD per-individual heterozygosity (all sites and transversions; native and depth-matched) |
-| `pop_angsd.sbatch` | Replication of the population-level ANGSD analysis of Liu et al. |
+| `pipeline/download_reads.*`, `pipeline/fetch_chunked.*`, `pipeline/wget_files.*`, `robin/rb_reads.sbatch` | Download and MD5-check the reads |
+| `pipeline/prep_refs.sbatch`, `pipeline/actinodura_*.sbatch`, `robin/rb_ref.sbatch` | Index the references; check the *Actinodura* reference (read mismatch rates against candidate assemblies) |
+| `pipeline/pilot_map.sbatch` | 1 M-fragment pilot mapping, mapDamage and TvCount (both bwa mem and bwa aln modes) |
+| `pipeline/full_map.sbatch`, `pipeline/rescale_md.sbatch`, `robin/rb_map.sbatch`, `robin/rb_rescale_md.sbatch` | Full mapping with PlainMap (bwa mem) and mapDamage quality rescaling |
+| `pipeline/het_ind.sbatch`, `pipeline/het_matched.sbatch`, `scripts/depth_match_manifest.py`, `robin/rb_het_ind.sbatch` | ANGSD per-individual heterozygosity (all sites and transversions; native and depth-matched) |
+| `pipeline/pop_angsd.sbatch` | Replication of the population-level ANGSD analysis of Liu et al. |
 | `hearty/` | HEARTY heterozygosity; `directional_singletons.py` gives singleton/doubleton counts by substitution class |
 | `atlas/` | ATLAS heterozygosity (calibration sites from GERP, depth series native/15/10/7.5/5×) |
 | `bcftools_roh/` | bcftools ROH in modern birds |
-| `scar_*.sbatch`, `robin/rb_profile.sbatch`, `robin/rb_scar_*.sbatch`, `scripts/scar_profile.py` | SCAR degradation simulations (see below) |
+| `pipeline/scar_*.sbatch`, `robin/rb_profile.sbatch`, `robin/rb_scar_*.sbatch`, `scripts/scar_profile.py` | SCAR degradation simulations (see below) |
 | `slim/` | Forward-time SLiM 4 metapopulation simulations of diversity loss after collapse (by Hernán E. Morales; see `slim/README.md`) |
 | `robin/submit_all.sh` | Full black-robin chain with SLURM dependencies |
 | `scripts/` | Summary tables and figures (`summary_table.py`, `figures.py`, `figure_liu_robin.py`, `main_figures.py`, `singleton_doubleton.py`, `pilot_damage_composite.py`) |
@@ -74,7 +77,7 @@ historical reads were stored locally. `scripts/safe_mkdir.sh` works around a clu
 
 ## Damage tables (TvCount)
 
-TvCount is not yet published. The calls to it (`tools/TvCount/TvCount.py` in `pilot_map.sbatch`, `scar_map.sbatch`,
+TvCount is not yet published. The calls to it (`tools/TvCount/TvCount.py` in `pipeline/pilot_map.sbatch`, `pipeline/scar_map.sbatch`,
 `robin/rb_damage.sbatch` and `robin/rb_profile.sbatch`) are left in so the settings are visible. Its outputs are
 released as count tables, so every rate can be recomputed without the software.
 
@@ -150,7 +153,7 @@ python scripts/scar_profile.py --misinc $S/BRH08_ERR6335811.misincorporation.txt
 or |TLEN| of the first mate for proper pairs. The command is in `robin/rb_profile.sbatch`; the *Fringilla* file
 was made with the same command on KIZ_013086.
 
-**Commands** (`scar_prep.sbatch`). The modern reads are first trimmed and merged with fastp (`-l 30`) into one
+**Commands** (`pipeline/scar_prep.sbatch`). The modern reads are first trimmed and merged with fastp (`-l 30`) into one
 single-end file (`original`). Then:
 
 ```bash
@@ -160,6 +163,6 @@ scar -i frag.fastq.gz  -o frag_deam_tvex -d profile_deam_tvex.txt --seed 12
 ```
 
 Both damage arms start from the same fragmented reads, so the arms differ only in the damage added.
-Every arm, including `original`, is then mapped and analysed exactly like the empirical data (`scar_map.sbatch`,
-`scar_het.sbatch`, `scar_hearty.sbatch`, `scar_atlas.sbatch`; robin copies in `robin/`).
+Every arm, including `original`, is then mapped and analysed exactly like the empirical data (`pipeline/scar_map.sbatch`,
+`pipeline/scar_het.sbatch`, `pipeline/scar_hearty.sbatch`, `pipeline/scar_atlas.sbatch`; robin copies in `robin/`).
 
