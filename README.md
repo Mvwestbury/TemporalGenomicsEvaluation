@@ -34,6 +34,7 @@ replaced by placeholders (see **Paths**), the third SCAR arm and its profiles ar
 | `atlas/` | ATLAS heterozygosity (calibration sites from GERP, depth series native/15/10/7.5/5×) |
 | `bcftools_roh/` | bcftools ROH in modern birds |
 | `scar_*.sbatch`, `robin/rb_profile.sbatch`, `robin/rb_scar_*.sbatch`, `scripts/scar_profile.py` | SCAR degradation simulations (see below) |
+| `slim/` | Forward-time SLiM 4 metapopulation simulations of diversity loss after collapse (by Hernán E. Morales; see `slim/README.md`) |
 | `robin/submit_all.sh` | Full black-robin chain with SLURM dependencies |
 | `scripts/` | Summary tables and figures (`summary_table.py`, `figures.py`, `figure_liu_robin.py`, `main_figures.py`, `singleton_doubleton.py`, `pilot_damage_composite.py`) |
 | `results/figures/*.tsv` | Plotted values of every figure |
@@ -68,6 +69,7 @@ historical reads were stored locally. `scripts/safe_mkdir.sh` works around a clu
 | ATLAS | 2.0.4, commit a37654b9 |
 | SCAR | commit 38719e8 (unpublished, in prep.; see below) |
 | TvCount | unpublished (see below) |
+| SLiM (simulations in `slim/`) | 4 |
 | Python | 3.13 (pandas 3.0, numpy 2.4, matplotlib 3.10) |
 
 ## Damage tables (TvCount)

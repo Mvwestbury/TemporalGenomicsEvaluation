@@ -1,0 +1,699 @@
+// SLiM 4 script to simulate expected genomic erosion in a metapopulation 
+// of 5 demes connected by a migration rate, undergoing an instant collapse and a reduction in connectivity
+// written by Hernán E. Morales, hernanm [@] sund.ku.dk
+// Five-deme WF metapopulation: abrupt demographic contraction + fragmentation.
+// Single tick = one nonoverlapping generation. Five demes exist throughout.
+// The historical sample is taken at the end of burn-in (tick burnEndTick).
+// At the next tick all 5 demes simultaneously change size and connectivity;
+// the modern sample is obtained btl_gens generations after the historical sample.
+// M_anc/M_btl specify the TOTAL fraction of offspring with a parent pair drawn
+// from another deme; each of the other 4 demes contributes M/4 symmetrically. 
+// Requires original chromosome coords and rho map files, see example command.
+// RESULTS: parameters.tsv, populations.tsv, diversity.tsv, individual.tsv,
+//          roh.tsv, comparison.tsv, optionally load.tsv and selected outputs.
+// ROH is inferred from mutation-defined heterozygous positions on the 
+// chromosome section, thus it is a proxy, not an IBD call.
+
+initialize() {
+    // Directory with chromosome map, recombination map, and optional DFE file.
+    if (!exists("basePath")) defineConstant("basePath", "PATH"); // must include coords_SLiM_GCF_000247815.1_FicAlb1.5_chr12.txt and out_rho4Ne_win2e+05_col.hun.snpPair_runALL_chr12.txt
+    if (!exists("outDir")) defineConstant("outDir", "PATH/out"); // must exist
+    if (!exists("outStem")) defineConstant("outStem", "metapop");
+    if (!exists("ancestorPrefix")) defineConstant("ancestorPrefix", basePath + "/metapop_ancestor");
+    
+// Ancestral population sizes    
+    if (!exists("N_anc1")) defineConstant("N_anc1", 1000); 
+    if (!exists("N_anc2")) defineConstant("N_anc2", 1000);
+    if (!exists("N_anc3")) defineConstant("N_anc3", 1000);
+    if (!exists("N_anc4")) defineConstant("N_anc4", 1000);
+    if (!exists("N_anc5")) defineConstant("N_anc5", 1000);
+// Bottleneck population sizes
+    if (!exists("N_btl1")) defineConstant("N_btl1", 20);
+    if (!exists("N_btl2")) defineConstant("N_btl2", 20);
+    if (!exists("N_btl3")) defineConstant("N_btl3", 20);
+    if (!exists("N_btl4")) defineConstant("N_btl4", 20);
+    if (!exists("N_btl5")) defineConstant("N_btl5", 20);
+// Migration ancestral (pre-bottleneck) and after bottleneck
+    if (!exists("M_anc")) defineConstant("M_anc", 0.1);
+    if (!exists("M_btl")) defineConstant("M_btl", 0.01);
+// Duration of bottleneck (simulation finishes at the end of this
+    if (!exists("btl_gens")) defineConstant("btl_gens", 10);
+// Burn-in before bottleneck
+    if (!exists("burnLen")) defineConstant("burnLen", 100);
+
+    if (!exists("runType")) defineConstant("runType", 1); // 1 neutral, 3 neutral + deleterious; deleterious not tested
+    // Distribution of fitness effects (DFE) for deleterious mutations
+    // 1 = gamma-distributed selection coefficients with an exponential s–h relationship
+    // 2 (or other values) = selection and dominance coefficients sampled from an external DFE file (not used here)
+    // Only relevant when runType = 3 (simulations with selection) see Dussex et al. 2023; TREE 10.1016/j.tree.2023.05.008
+    if (!exists("DFE")) defineConstant("DFE", 1);
+
+    // Proportion of additional fully recessive lethal mutations (s = -1, h = 0)
+    // Relative to the number of mutation types sampled from the external DFE
+    // Only applies when DFE != 1; the gamma DFE has a fixed 5% lethal fraction
+    if (!exists("LhT")) defineConstant("LhT", 0.05);
+
+    // Save the ancestral metapopulation state at the end of the burn-in
+    // 0 = disabled; 1 = save population state and, if applicable, s and h coefficients
+    if (!exists("saveAncestor")) defineConstant("saveAncestor", 0);
+
+    // Terminate the simulation after the ancestral burn-in, before the bottleneck
+    // 0 = continue through the bottleneck; 1 = stop after burn-in
+    // Requires saveAncestor = 1 when enabled
+    if (!exists("stopAfterBurn")) defineConstant("stopAfterBurn", 0);
+
+    // Resume from a previously saved ancestral metapopulation state
+    // 0 = simulate burn-in from scratch; 1 = load saved state and skip burn-in
+    // Allows multiple bottleneck scenarios to share the same ancestral state
+    if (!exists("resumeAncestor")) defineConstant("resumeAncestor", 0);
+
+    // Number of diploid individuals randomly sampled per deme at each sampling point
+    // If deme size is smaller than sampleN, all individuals are sampled
+    // Population-wide diversity estimates are also calculated independently
+    if (!exists("sampleN")) defineConstant("sampleN", 5);
+
+    // Output frequency during the bottleneck phase, in generations
+    // 1 = output every generation; historical and modern endpoints are always recorded
+    if (!exists("outputEvery")) defineConstant("outputEvery", 1);
+
+    // Output frequency during the ancestral burn-in, in generations
+    // 0 = no intermediate output; only record the historical endpoint
+    if (!exists("burnOutputEvery")) defineConstant("burnOutputEvery", 0);
+
+    // Estimate runs of homozygosity (ROH) and genomic inbreeding (FROH)
+    // 0 = disabled; 1 = enabled
+    // ROH are approximated using uninterrupted homozygous regions between
+    // heterozygous mutation positions, excluding the appended synthetic exome
+    if (!exists("ROHest")) defineConstant("ROHest", 1);
+
+    // Minimum length of a homozygous segment to be classified as ROH, in bp
+    // Default = 500,000 bp (0.5 Mb)
+    // FROH is calculated as the sum of qualifying ROH lengths divided by
+    // the length of the original simulated chromosome
+    if (!exists("rohCutoff")) defineConstant("rohCutoff", 500000);
+
+	// Demographic and parameters calculations
+    defineConstant("Nanc", c(N_anc1,N_anc2,N_anc3,N_anc4,N_anc5));
+    defineConstant("Nbtl", c(N_btl1,N_btl2,N_btl3,N_btl4,N_btl5));
+    if (min(Nanc) < 2 | min(Nbtl) < 2)
+        stop("Each deme must contain at least two individuals in both phases.");
+    if (M_anc < 0.0 | M_anc > 1.0 | M_btl < 0.0 | M_btl > 1.0)
+        stop("Migration fractions M_anc and M_btl must be between 0 and 1.");
+    if (burnLen < 1 | btl_gens < 1 | sampleN < 1 | outputEvery < 1)
+        stop("Require burnLen, btl_gens, sampleN and outputEvery >= 1.");
+    if (runType != 1 & runType != 3) stop("runType must be 1 (neutral) or 3 (selected).");
+    if (resumeAncestor == 1 & saveAncestor == 1)
+        stop("Use either saveAncestor or resumeAncestor, not both.");
+    defineConstant("effBurnLen", (resumeAncestor == 1) ? 0 else burnLen);
+    defineConstant("burnEndTick", asInteger(1 + effBurnLen));
+    defineConstant("btlStartTick", asInteger(burnEndTick + 1));
+    defineConstant("presentTick", asInteger(burnEndTick + btl_gens));
+    // Seed comes from the CLI -s; no RNG reset is performed by this script.
+    defineConstant("runSeed", getSeed());
+    defineConstant("runID", "Na" + paste(Nanc, sep="-") +
+       "_Nb" + paste(Nbtl, sep="-") +
+       "_Ma" + rateTag(M_anc) + "_Mb" + rateTag(M_btl) +
+       "_T" + btl_gens + "_B" + burnLen +
+       "_R" + runType + "_S" + runSeed);
+    defineConstant("outPrefix", outDir + "/" + outStem + "_" + runID);
+
+	// Genomic archotecture
+	// chromosome + exome; chromosome to keep linkage equilibrium; exome to accumulate load (not used here)
+	if (!exists("coord_file_in"))
+		defineConstant("coord_file_in", basePath + "/coords_SLiM_GCF_000247815.1_FicAlb1.5_chr12.txt");
+	if (!exists("rho_file_in"))
+		defineConstant("rho_file_in", basePath + "/out_rho4Ne_win2e+05_col.hun.snpPair_runALL_chr12.txt");
+	if (!exists("hs_in"))
+		defineConstant("hs_in", basePath + "/1_hs_prod1_hmode1_Ne20K_step40K.txt");
+	if (!exists("g")) defineConstant("g", 10); // set to very low number, exome innactive
+	if (!exists("geneLength")) defineConstant("geneLength", 10);
+	if (!exists("chrNum")) defineConstant("chrNum", 2);
+	if (!exists("muChrom")) defineConstant("muChrom", 5.0e-9);
+	if (!exists("muExome")) defineConstant("muExome", 5.0e-9);
+	if (!exists("rho")) defineConstant("rho", 1e-4);
+	defineConstant("del_mut", 1000);
+	defineConstant("mu", muExome);
+	
+	initializeSLiMModelType("WF");
+	initializeSLiMOptions(keepPedigrees=T); // needed for individual IDs in metrics
+	// NO initializeSex(); simultaneous hermaphrodites, selfing prevented explicitly
+	// Always disable conversion of deleterious mutations to substitutions:
+	// otherwise globally fixed deleterious alleles would disappear from load metrics.	
+
+	// Exact original distribution of fixed selection and dominance coefficients.
+	// Only relevant when runType = 3 (simulations with selection) see Dussex et al. 2023; TREE 10.1016/j.tree.2023.05.008
+	// Save/reload all sampled s/h values along with the ancestral state.
+	if (runType == 1) {
+		s = c(-0.05);
+		h = c(0.5);
+	}
+	else if (resumeAncestor == 1) {
+		s = readFloatLines(ancestorPrefix + "_s.txt");
+		h = readFloatLines(ancestorPrefix + "_h.txt");
+		if (size(s) != size(h) | size(s) < 1)
+			stop("Saved ancestral DFE vectors are missing or incompatible.");
+	}
+	else if (DFE == 1) {
+		m2_gamma = sort(rgamma(1e6, -0.05, 0.5));
+		defineConstant("LethalTail", 0.05);
+		m2_gamma[sample(0:(size(m2_gamma)-1), asInteger(size(m2_gamma)*LethalTail))] = -1.0;
+		s = sort(sample(m2_gamma, del_mut));
+		h = 0.5 * 10^(-13*abs(s));
+	}
+	else {
+		hs = readFile(hs_in);
+		hs = hs[hs != ""];
+		if (del_mut > size(hs)) stop("Too few entries in hs_in.");
+		hs = sample(hs, del_mut, replace=F);
+		s = -asFloat(sapply(hs, "strsplit(applyValue, '\t')[3];"));
+		h = asFloat(sapply(hs, "strsplit(applyValue, '\t')[4];"));
+		lethals = asInteger(size(s) * LhT);
+		if (lethals > 0) {
+			s = c(s, rep(-1.0, lethals));
+			h = c(h, rep(0.0, lethals));
+		}
+	}
+	defineConstant("s_sample", s);
+	defineConstant("h_sample", h);
+	
+	nDelTypes = length(s);
+	prop = rep(1.0/nDelTypes, nDelTypes);
+	prop_exons = prop * 2.31;
+	prop_introns = prop * 0.8;
+	prop_intergenic = prop * 0.0;
+	
+	if (runType == 3) {
+		for (i in 0:(nDelTypes-1)) {
+			mt = initializeMutationType(i+2, h[i], "f", asFloat(s[i]));
+			mt.convertToSubstitution = F;
+		}
+	}
+// m1 is the neutral mutation type 	
+	initializeMutationType("m1", 0.5, "f", 0.0);
+	m1.convertToSubstitution = T;
+	defineConstant("mut_neutral", 1);
+	
+	if (runType == 1) {
+		initializeGenomicElementType("g1", m1, 1.0);
+		initializeGenomicElementType("g2", m1, 1.0);
+		initializeGenomicElementType("g3", m1, 1.0);
+		initializeGenomicElementType("g4", m1, 1.0);
+	}
+	else {
+		initializeGenomicElementType("g1", 1:(nDelTypes+1), c(1.0, prop_exons));
+		initializeGenomicElementType("g2", 1:(nDelTypes+1), c(1.0, prop_introns));
+		initializeGenomicElementType("g3", 1:(nDelTypes+1), c(1.0, prop_intergenic));
+		initializeGenomicElementType("g4", 1:(nDelTypes+1), c(1.0, prop_exons));
+	}
+	
+	// The chromosome + simulated exome features 
+	coord_file = readFile(coord_file_in);
+	mu_rates = c(); mu_ends = c(); mu_features = c();
+	for (coord_line in coord_file) {
+		if (coord_line == "") next;
+		ROW = strsplit(coord_line, "\t");
+		feature = ROW[2];
+		if (feature == "exon") {
+			initializeGenomicElement(g1, asInteger(ROW[3]), asInteger(ROW[4]));
+			mu_rates = c(mu_rates, muChrom);
+			mu_features = c(mu_features, "exon");
+			mu_ends = c(mu_ends, asInteger(ROW[4]));
+		}
+		if (feature == "intron") {
+			initializeGenomicElement(g2, asInteger(ROW[3]), asInteger(ROW[4]));
+			mu_rates = c(mu_rates, muChrom);
+			mu_features = c(mu_features, "intron");
+			mu_ends = c(mu_ends, asInteger(ROW[4]));
+		}
+		if (feature == "non_coding") {
+			initializeGenomicElement(g3, asInteger(ROW[3]), asInteger(ROW[4]));
+			mu_rates = c(mu_rates, muChrom);
+			mu_features = c(mu_features, "interGen");
+			mu_ends = c(mu_ends, asInteger(ROW[4]));
+		}
+	}
+	chromEnd = mu_ends[size(mu_ends)-1] + 1;
+	defineConstant("chromosomeEnd", chromEnd);
+	gene_nums = rep(g/chrNum, chrNum);
+	for (i in 1:g) {
+		initializeGenomicElement(g1,
+			chromEnd + ((i-1)*geneLength) + (i-1),
+			chromEnd + (i*geneLength) + (i-2));
+		mu_rates = c(mu_rates, mu);
+		mu_features = c(mu_features, "exome");
+		mu_ends = c(mu_ends, chromEnd + (i*geneLength) + (i-2));
+	}
+	initializeMutationRate(mu_rates, mu_ends);
+	
+	rho_file = readFile(rho_file_in);
+	rates = NULL; ends = NULL;
+	for (rho_line in rho_file) {
+		if (rho_line == "") next;
+		components = strsplit(rho_line, "\t");
+		ends = c(ends, asInteger(components[2]));
+		rates = c(rates, asFloat(components[7]));
+	}
+	for (i in 1:(size(gene_nums)-1))
+		rates = c(rates, 0, rep(c(rho, 0), asInteger(gene_nums[i-1]-1)), 0.5);
+	rates = c(rates, 0, rep(c(rho, 0), asInteger(gene_nums[size(gene_nums)-1]-1)));
+	for (i in 1:g)
+		ends = c(ends, chromEnd+(i*geneLength)+(i-2), chromEnd+(i*geneLength)+(i-1));
+	ends = ends[0:(size(ends)-2)];
+	defineConstant("recomb_ends", ends);
+	defineConstant("recomb_rates", rates);
+	defineConstant("mut_features", mu_features);
+	defineConstant("mut_ends", mu_ends);
+	defineConstant("mut_rates", mu_rates);
+	initializeRecombinationRate(rates, ends);
+	defineConstant("chromLen", ends[size(ends)-1]);
+	defineConstant("seqLength", chromLen);
+}
+
+// A filename-safe float label (0.04 -> 0p04; 1e-05 is also legal).
+function (s$) rateTag(f$ x) {
+    return paste(strsplit(asString(x), "."), sep="p");
+}
+
+function (f) readFloatLines(s$ path) {
+    if (!fileExists(path)) stop("Missing saved DFE: " + path);
+    vals = float(0);
+    for (line in readFile(path)) if (line != "") vals = c(vals, asFloat(line));
+    return vals;
+}
+
+// In a WF model setMigrationRates is BACKWARD migration: target offspring
+// chooses parents from this source with probability m/4.
+function (void) setIslandMigration(f$ m) {
+    pops = sim.subpopulations;
+    for (dest in pops) {
+        sources = pops[pops != dest];
+        dest.setMigrationRates(sources, rep(m / 4.0, size(sources)));
+    }
+}
+
+function (void) writeParameters(void) {
+    path = outPrefix + "_parameters.tsv";
+    writeFile(path, "parameter\tvalue", append=F);
+    writeFile(path, "seed\t" + runSeed, append=T);
+    writeFile(path, "runType\t" + runType, append=T);
+    writeFile(path, "burnLen\t" + burnLen, append=T);
+    writeFile(path, "btl_gens\t" + btl_gens, append=T);
+    writeFile(path, "M_anc\t" + M_anc, append=T);
+    writeFile(path, "M_btl\t" + M_btl, append=T);
+    for (k in 0:4) {
+        writeFile(path, "N_anc" + (k+1) + "\t" + Nanc[k], append=T);
+        writeFile(path, "N_btl" + (k+1) + "\t" + Nbtl[k], append=T);
+    }
+    writeFile(path, "sampleN\t" + sampleN, append=T);
+    writeFile(path, "ROHest\t" + ROHest, append=T);
+    writeFile(path, "rohCutoff\t" + rohCutoff, append=T);
+    writeFile(path, "outputEvery\t" + outputEvery, append=T);
+    writeFile(path, "burnOutputEvery\t" + burnOutputEvery, append=T);
+    writeFile(path, "resumeAncestor\t" + resumeAncestor, append=T);
+    writeFile(path, "saveAncestor\t" + saveAncestor, append=T);
+    writeFile(path, "ancestorPrefix\t" + ancestorPrefix, append=T);
+    writeFile(path, "basePath\t" + basePath, append=T);
+    writeFile(path, "coord_file_in\t" + coord_file_in, append=T);
+    writeFile(path, "rho_file_in\t" + rho_file_in, append=T);
+    writeFile(path, "chrNum\t" + chrNum, append=T);
+    writeFile(path, "g\t" + g, append=T);
+    writeFile(path, "geneLength\t" + geneLength, append=T);
+    writeFile(path, "muChrom\t" + muChrom, append=T);
+    writeFile(path, "muExome\t" + muExome, append=T);
+    writeFile(path, "rho\t" + rho, append=T);
+    writeFile(path, "DFE\t" + DFE, append=T);
+    writeFile(path, "LhT\t" + LhT, append=T);
+    writeFile(path, "chromosome_bp\t" + chromosomeEnd, append=T);
+    writeFile(path, "full_simulated_bp\t" + (sim.chromosome.lastPosition+1), append=T);
+}
+
+// start simulation, set migration and write output files
+1 early() {
+    if (resumeAncestor == 1) {
+        if (!fileExists(ancestorPrefix + ".slim")) stop("Saved ancestor not found.");
+        sim.readFromPopulationFile(ancestorPrefix + ".slim");
+        community.tick = 1;
+        sim.cycle = 1;
+        if (size(sim.subpopulations) != 5) stop("Ancestor must contain five demes.");
+        if (any(sim.subpopulations.individualCount != Nanc))
+            stop("Ancestral state does not match the five N_anc settings.");
+    }
+    else {
+        for (k in 0:4) sim.addSubpop(k+1, Nanc[k]);
+    }
+    for (pop in sim.subpopulations) {
+        pop.tag = Nanc[pop.id-1];
+        pop.setValue("targetN", Nanc[pop.id-1]);
+    }
+    setIslandMigration(M_anc);
+    community.rescheduleScriptBlock(s999, presentTick, presentTick);
+    writeParameters();
+    writeFile(outPrefix + "_populations.tsv", "tick\tgenBP\tphase\tdeme\tK\tN\tmigration", append=F);
+    writeFile(outPrefix + "_diversity.tsv",
+       "tick\tgenBP\tphase\tdeme\tN\tnSample\tHneutral_sample\tHtotal_sample\tHneutral_census\tHtotal_census\tthetaW_sample\tTajimaD_sample", append=F);
+    writeFile(outPrefix + "_pi.tsv", "tick\tgenBP\tphase\tdeme\tpi_sample\tN\tthetaW_sample\tTajimaD_sample", append=F);
+    writeFile(outPrefix + "_piTotal.tsv", "tick\tgenBP\tphase\tdeme\tpiTotal_sample\tN", append=F);
+    writeFile(outPrefix + "_comparison.tsv",
+       "deme\tHhist_sample\tHmodern_sample\tHratio\tHloss_percent\tHhist_census\tHmodern_census\tHloss_census_percent\tFROHhist_mean\tFROHmodern_mean", append=F);
+    writeFile(outPrefix + "_individual.tsv",
+       "tick\tgenBP\tphase\tdeme\tpedigreeID\tHneutral_chr\tHtotal_chr\tnHetDel\tnHomDel\tfitness", append=F);
+    writeFile(outPrefix + "_fst.tsv",
+        "deme\tFST_sample_Hudson\tFST_census_Hudson\tnHistSample\tnModernSample\tnHistCensus\tnModernCensus\tnSites_sample\tnSites_census", append=F);
+    if (ROHest == 1)
+        writeFile(outPrefix + "_roh.tsv", "tick\tgenBP\tphase\tdeme\tpedigreeID\tSROH\tNROH\tFROH\tROHlengths\tROHcoords\tcutoff\tchrBp", append=F);
+    if (runType == 3)
+        writeFile(outPrefix + "_load.tsv", "tick\tgenBP\tphase\tdeme\tN\tnSegDel\tnFixedDel\ttotalLoad\trealizedLoad\tmaskedLoad\tmeanCachedFitness", append=F);
+    catn("METAPOP WF: prefix=" + outPrefix);
+}
+
+// Demographic change
+// Sampling at late burnEndTick is the historical state.
+// The change in early() at burnEndTick+1 affects the first new WF generation.
+early() {
+    if (sim.cycle == btlStartTick) {
+        for (pop in sim.subpopulations) {
+            pop.setSubpopulationSize(Nbtl[pop.id-1]);
+            pop.tag = Nbtl[pop.id-1];
+            pop.setValue("targetN", Nbtl[pop.id-1]);
+        }
+        setIslandMigration(M_btl);
+        catn("BOTTLENECK begins at tick " + sim.cycle + ": M=" + M_btl);
+    }
+}
+
+// scheduled end
+s999 2 late() { sim.simulationFinished(); }
+
+// write ouptuts
+late() {
+    tick = sim.cycle;
+    if (tick == burnEndTick & resumeAncestor == 0 & saveAncestor == 1) {
+        sim.outputFull(ancestorPrefix + ".slim", pedigreeIDs=T);
+        if (runType == 3) {
+            writeFile(ancestorPrefix + "_s.txt", asString(s_sample), append=F);
+            writeFile(ancestorPrefix + "_h.txt", asString(h_sample), append=F);
+        }
+        catn("Saved five-deme ancestor: " + ancestorPrefix);
+    }
+    if (tick < burnEndTick) {
+        if (burnOutputEvery == 0 | tick % burnOutputEvery != 0) return;
+    }
+    else if (tick > burnEndTick & tick != presentTick & (tick - burnEndTick) % outputEvery != 0)
+        return;
+    // For current state: pre-bottleneck genBP=btl_gens, modern genBP=0.
+    bp = presentTick - tick;
+    phase = (tick <= burnEndTick) ? "ancestral" else "bottleneck";
+    for (pop in sim.subpopulations) {
+        n = pop.individualCount;
+        writeFile(outPrefix + "_populations.tsv", tick + "\t" + bp + "\t" + phase +
+            "\t" + pop.id + "\t" + pop.tag + "\t" + n + "\t" +
+            ((tick <= burnEndTick) ? M_anc else M_btl), append=T);
+        inds = pop.sampleIndividuals(min(sampleN,n));
+        // Population-wide heterozygosity in the original scripts, corrected to
+        // operate on the intended chromosome/genome and all surviving individuals.
+        Hn = getPopHet(pop, m1, F);
+        Ht = getPopHet(pop, m1, T);
+        stats = sampleStats(inds, m1);
+        hs = sampleMeanHet(inds, m1, T);
+        writeFile(outPrefix + "_pi.tsv", tick + "\t" + bp + "\t" + phase + "\t" +
+          pop.id + "\t" + stats[0] + "\t" + n + "\t" + stats[1] + "\t" + stats[2], append=T);
+        writeFile(outPrefix + "_piTotal.tsv", tick + "\t" + bp + "\t" + phase + "\t" +
+          pop.id + "\t" + hs + "\t" + n, append=T);
+        writeFile(outPrefix + "_diversity.tsv", tick + "\t" + bp + "\t" + phase +
+           "\t" + pop.id + "\t" + n + "\t" + size(inds) + "\t" +
+           stats[0] + "\t" + hs + "\t" + Hn + "\t" + Ht +
+           "\t" + stats[1] + "\t" + stats[2], append=T);
+        if (tick == burnEndTick) saveHistoricalFST(pop, inds);
+        if (tick == presentTick) writeTemporalFST(pop, inds);
+        writeIndividuals(pop, inds, bp, phase);
+        meanROH = NAN;
+        if (ROHest == 1) meanROH = writeROH(pop, inds, bp, phase);
+        if (runType == 3) writeLoad(pop, bp, phase);
+        if (tick == burnEndTick) {
+            pop.setValue("Hhist_sample", stats[0]);
+            pop.setValue("Hhist_census", Hn);
+            pop.setValue("Fhist", meanROH);
+        }
+        if (tick == presentTick) {
+            H0 = pop.getValue("Hhist_sample");
+            Hc0 = pop.getValue("Hhist_census");
+            R = (H0 > 0) ? stats[0]/H0 else NAN;
+            loss = (H0 > 0) ? 100.0*(1.0-R) else NAN;
+            lossC = (Hc0 > 0) ? 100.0*(1.0-Hn/Hc0) else NAN;
+            writeFile(outPrefix + "_comparison.tsv", pop.id + "\t" + H0 + "\t" +
+                stats[0] + "\t" + R + "\t" + loss + "\t" + Hc0 +
+                "\t" + Hn + "\t" + lossC + "\t" + pop.getValue("Fhist") +
+                "\t" + meanROH, append=T);
+        }
+    }
+    if (tick == burnEndTick & stopAfterBurn == 1) {
+        if (saveAncestor != 1) stop("stopAfterBurn requires saveAncestor=1.");
+        sim.simulationFinished();
+    }
+    if (tick == presentTick) sim.simulationFinished();
+}
+
+// print out status 
+1: late() {
+	if(sim.cycle == 1 | sim.cycle % 500 ==0){
+		for(pop in sim.subpopulations)
+		{
+			catn("PROGRESS - late  pop:"+pop.id+" - "+date() + "\t" + time() + "\t" + "generation: " + sim.cycle + "\t" + "N: " + pop.individualCount + "\t" + "  memory usage: "+usage()/1000+"Gb" + "\r");
+		}
+	
+	}
+}
+
+// Pop mean of diploid heterozygosity; all sites of sequence when total=T,
+// neutral mutations only otherwise. Denominator is true simulated length.
+function (f$) getPopHet(o<Subpopulation>$ pop, o<MutationType>$ mt, l$ total) {
+    acc = 0.0;
+    for (ind in pop.individuals) {
+        a = total ? ind.genomes[0].mutations else ind.genomes[0].mutationsOfType(mt);
+        b = total ? ind.genomes[1].mutations else ind.genomes[1].mutationsOfType(mt);
+        acc = acc + size(setSymmetricDifference(a,b));
+    }
+    return acc / (pop.individualCount * (sim.chromosome.lastPosition+1));
+}
+
+function (f$) sampleMeanHet(o inds, o<MutationType>$ mt, l$ total) {
+    acc = 0.0;
+    for (ind in inds) {
+        a = total ? ind.genomes[0].mutations else ind.genomes[0].mutationsOfType(mt);
+        b = total ? ind.genomes[1].mutations else ind.genomes[1].mutationsOfType(mt);
+        acc = acc + size(setSymmetricDifference(a,b));
+    }
+    return acc / (size(inds) * (sim.chromosome.lastPosition+1));
+}
+
+// Correct Watterson theta and Tajima D from the SAME N sampled individuals.
+// Returns mean individual heterozygosity, thetaW per site, Tajima D.
+function (f) sampleStats(o inds, o<MutationType>$ mt) {
+    nChr = 2*size(inds);
+    L = sim.chromosome.lastPosition+1;
+    h = sampleMeanHet(inds, mt, F);
+    muts = c();
+    for (ind in inds)
+        muts = c(muts, ind.genomes[0].mutationsOfType(mt), ind.genomes[1].mutationsOfType(mt));
+    muts = unique(muts);
+    if (size(muts) == 0) return c(h, 0.0, NAN);
+    cnt = integer(size(muts));
+    for (ind in inds) {
+        cnt = cnt + asInteger(ind.genomes[0].containsMutations(muts));
+        cnt = cnt + asInteger(ind.genomes[1].containsMutations(muts));
+    }
+    freqs = cnt / nChr;
+    S = sum(cnt > 0 & cnt < nChr);
+    a1 = sum(1.0 / (1:(nChr-1)));
+    a2 = sum(1.0 / ((1:(nChr-1))^2));
+    thetaW = S / a1 / L;
+    piTotal = sum(2.0*freqs*(1.0-freqs)) * nChr/(nChr-1.0);
+    b1 = (nChr+1.0)/(3.0*(nChr-1));
+    b2 = 2.0*(nChr^2+nChr+3.0)/(9.0*nChr*(nChr-1.0));
+    c1 = b1 - 1.0/a1;
+    c2 = b2 - (nChr+2.0)/(a1*nChr) + a2/(a1^2);
+    e1 = c1/a1;
+    e2 = c2/(a1^2+a2);
+    variance = e1*S + e2*S*(S-1);
+    tajD = (variance > 0.0) ? (piTotal - S/a1)/sqrt(variance) else NAN;
+    return c(h,thetaW,tajD);
+}
+
+function (void) writeIndividuals(o<Subpopulation>$ pop, o inds, i$ bp, s$ phase) {
+    for (ind in inds) {
+        a = ind.genomes[0].mutationsOfType(m1);
+        b = ind.genomes[1].mutationsOfType(m1);
+        // Chromosome-only variation for comparison with ROH.
+        a = a[a.position < chromosomeEnd];
+        b = b[b.position < chromosomeEnd];
+        Hn = size(setSymmetricDifference(a,b))/chromosomeEnd;
+        a = ind.genomes[0].mutations;
+        b = ind.genomes[1].mutations;
+        a = a[a.position < chromosomeEnd];
+        b = b[b.position < chromosomeEnd];
+        Ht = size(setSymmetricDifference(a,b))/chromosomeEnd;
+        dels = ind.uniqueMutations;
+        dels = dels[dels.mutationType.id != 1];
+        nHet=0; nHom=0;
+        if (size(dels)>0) {
+            v0 = ind.genomes[0].containsMutations(dels);
+            v1 = ind.genomes[1].containsMutations(dels);
+            nHet = sum(v0 != v1);
+            nHom = sum(v0 & v1);
+        }
+//        fit = pop.cachedFitness(ind.index);
+        fit = "NA";
+        writeFile(outPrefix + "_individual.tsv", sim.cycle + "\t" + bp + "\t" + phase +
+          "\t" + pop.id + "\t" + ind.pedigreeID + "\t" + Hn + "\t" + Ht +
+          "\t" + nHet + "\t" + nHom + "\t" + fit, append=T);
+    }
+}
+
+// Mutation-marker ROH proxy, restricted to the true chromosome (not synthetic
+// exon array). Adjacent heterozygous markers delimit putative homozygous spans.
+function (f$) writeROH(o<Subpopulation>$ pop, o inds, i$ bp, s$ phase) {
+    frohs = float(0);
+    for (ind in inds) {
+        allm = unique(c(ind.genomes[0].mutations, ind.genomes[1].mutations));
+        allm = allm[allm.position < chromosomeEnd];
+        pos = integer(0);
+        if (size(allm)>0) {
+            v0 = ind.genomes[0].containsMutations(allm);
+            v1 = ind.genomes[1].containsMutations(allm);
+            pos = sort(allm.position[v0 != v1]);
+        }
+        starts = c(0, pos+1);
+        ends = c(pos-1, chromosomeEnd-1);
+        lens = ends-starts+1;
+        keep = (lens >= rohCutoff);
+        lengths = lens[keep];
+        SROH = sum(lengths);
+        nro = size(lengths);
+        fro = SROH/chromosomeEnd;
+        frohs = c(frohs, fro);
+        coords = "";
+        if (nro > 0) {
+            ss = starts[keep]; ee = ends[keep];
+            cc = c();
+            for (j in seqLen(nro)) cc = c(cc, ss[j] + "-" + ee[j]);
+            coords = paste(cc, sep=",");
+        }
+        lenText = (nro > 0) ? paste(lengths,sep=",") else "";
+        writeFile(outPrefix + "_roh.tsv", sim.cycle + "\t" + bp + "\t" + phase +
+            "\t" + pop.id + "\t" + ind.pedigreeID + "\t" + SROH +
+            "\t" + nro + "\t" + fro + "\t" + lenText +
+            "\t" + coords + "\t" + rohCutoff + "\t" + chromosomeEnd, append=T);
+    }
+    return mean(frohs);
+}
+
+// Original definition of total, realized and masked load, excluding neutral m1.
+function (void) writeLoad(o<Subpopulation>$ pop, i$ bp, s$ phase) {
+    muts = sim.mutations;
+    muts = muts[muts.mutationType.id != 1];
+    freqs = sim.mutationFrequencies(pop, muts);
+    ss = abs(muts.selectionCoeff);
+    hh = muts.mutationType.dominanceCoeff;
+    nSeg = sum(freqs > 0.0 & freqs < 1.0);
+    nFixed = sum(freqs == 1.0);
+    total = sum(freqs*ss);
+    realized = sum(freqs^2*ss + 2*freqs*(1.0-freqs)*ss*hh);
+    masked = total-realized;
+    mf = mean(pop.cachedFitness(pop.individuals.index));
+    writeFile(outPrefix + "_load.tsv", sim.cycle + "\t" + bp + "\t" + phase +
+        "\t" + pop.id + "\t" + pop.individualCount + "\t" + nSeg + "\t" + nFixed + "\t" + total +
+        "\t" + realized + "\t" + masked + "\t" + mf, append=T);
+}
+
+
+// Temporal Hudson FST: neutral mutation IDs are saved at the historical time
+// so extinct mutations can be treated as frequency zero at the modern time.
+// Neutral substitutions arising between sampling times are treated as fixed.
+// Ratio-of-sums, with finite-sample corrections, calculated separately for
+// the existing individual sample and the entire deme.
+
+function (i) neutralCounts(o genomes, o muts) {
+    counts = integer(size(muts));
+    for (genome in genomes)
+        counts = counts + asInteger(genome.containsMutations(muts));
+    return counts;
+}
+
+function (void) saveHistoricalFST(o<Subpopulation>$ pop, o inds) {
+    muts = sim.mutationsOfType(m1);
+    ids = muts.id;
+    pop.setValue("fst_hist_ids", ids);
+    oldSubs = sim.substitutions;
+    oldSubs = oldSubs[oldSubs.mutationType == m1];
+    pop.setValue("fst_old_sub_ids", oldSubs.id);
+    pop.setValue("fst_hist_sample", neutralCounts(inds.genomes, muts));
+    pop.setValue("fst_hist_census", neutralCounts(pop.genomes, muts));
+    pop.setValue("fst_hist_ns", size(inds.genomes));
+    pop.setValue("fst_hist_nc", size(pop.genomes));
+}
+
+function (f) hudsonFromCounts(i counts0, i counts1, i$ n0, i$ n1) {
+    if (n0 < 2 | n1 < 2) return c(NAN, 0);
+    p0 = counts0 / asFloat(n0);
+    freqModern = counts1 / asFloat(n1);
+    informative = (counts0 != 0 | counts1 != 0);
+    denom = p0*(1.0-freqModern) + freqModern*(1.0-p0);
+    numer = (p0-freqModern)^2 -
+        p0*(1.0-p0)/(n0-1.0) -
+        freqModern*(1.0-freqModern)/(n1-1.0);
+    valid = informative & (denom > 0.0);
+    if (sum(valid) == 0) return c(NAN, 0);
+    return c(sum(numer[valid])/sum(denom[valid]), sum(valid));
+}
+
+function (void) writeTemporalFST(o<Subpopulation>$ pop, o inds) {
+    histIDs = pop.getValue("fst_hist_ids");
+    histS = pop.getValue("fst_hist_sample");
+    histC = pop.getValue("fst_hist_census");
+    ns0 = pop.getValue("fst_hist_ns");
+    nc0 = pop.getValue("fst_hist_nc");
+
+    muts = sim.mutationsOfType(m1);
+    modernIDs = muts.id;
+    modernS = neutralCounts(inds.genomes, muts);
+    modernC = neutralCounts(pop.genomes, muts);
+    ns1 = size(inds.genomes);
+    nc1 = size(pop.genomes);
+
+    // Include neutral mutations that fixed globally and became substitutions.
+    subs = sim.substitutions;
+    subs = subs[subs.mutationType == m1];
+    subIDs = setDifference(subs.id, pop.getValue("fst_old_sub_ids"));
+    allIDs = unique(c(histIDs, modernIDs, subIDs));
+
+    hS = integer(size(allIDs));
+    hC = integer(size(allIDs));
+    mS = integer(size(allIDs));
+    mC = integer(size(allIDs));
+    for (j in seqAlong(allIDs)) {
+        id = allIDs[j];
+        k = match(id, histIDs);
+        if (k >= 0) {
+            hS[j] = histS[k];
+            hC[j] = histC[k];
+        }
+        k = match(id, modernIDs);
+        if (k >= 0) {
+            mS[j] = modernS[k];
+            mC[j] = modernC[k];
+        }
+        if (any(subIDs == id)) {
+            mS[j] = ns1;
+            mC[j] = nc1;
+        }
+    }
+
+    sampleFST = hudsonFromCounts(hS, mS, ns0, ns1);
+    censusFST = hudsonFromCounts(hC, mC, nc0, nc1);
+    writeFile(outPrefix + "_fst.tsv",
+        pop.id + "\t" + sampleFST[0] + "\t" + censusFST[0] +
+        "\t" + (ns0/2) + "\t" + (ns1/2) +
+        "\t" + (nc0/2) + "\t" + (nc1/2) +
+        "\t" + sampleFST[1] + "\t" + censusFST[1], append=T);
+}
+
