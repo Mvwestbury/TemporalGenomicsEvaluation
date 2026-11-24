@@ -70,14 +70,15 @@ historical reads were stored locally. `scripts/safe_mkdir.sh` works around a clu
 | ANGSD | 0.935 |
 | HEARTY | commit d8305fe |
 | ATLAS | 2.0.4, commit a37654b9 |
-| SCAR | commit 38719e8 (unpublished, in prep.; see below) |
-| TvCount | unpublished (see below) |
+| SCAR | commit 38719e8 (not yet public; available from the authors on request) |
+| TvCount | in-house, not yet public; available from the authors on request |
 | SLiM (simulations in `slim/`) | 4 |
 | Python | 3.13 (pandas 3.0, numpy 2.4, matplotlib 3.10) |
 
 ## Damage tables (TvCount)
 
-TvCount is not yet published. The calls to it (`tools/TvCount/TvCount.py` in `pipeline/pilot_map.sbatch`, `pipeline/scar_map.sbatch`,
+TvCount is not yet publicly released but is available from the authors on request. All of its outputs used in this
+study are included here. The calls to it (`tools/TvCount/TvCount.py` in `pipeline/pilot_map.sbatch`, `pipeline/scar_map.sbatch`,
 `robin/rb_damage.sbatch` and `robin/rb_profile.sbatch`) are left in so the settings are visible. Its outputs are
 released as count tables, so every rate can be recomputed without the software.
 
@@ -113,8 +114,8 @@ from the HEARTY 5-read draws (`hearty/directional_singletons.py`, `scripts/singl
 
 ## SCAR simulations
 
-SCAR (commit 38719e8) is not yet public. A simulation is fully specified by its inputs, so these are released
-exactly as given to SCAR:
+SCAR (commit 38719e8) is not yet publicly released but is available from the authors on request. A simulation is
+fully specified by its inputs, so all inputs used in this study are released here exactly as given to SCAR:
 
 **Inputs (`scar_sim/profiles/`)**
 
